@@ -63,6 +63,12 @@ USERNAME="admin"
 PASSWORD="admin"
 BASE_PATH="panel"
 
+# Флаги для отслеживания параметров, заданных через аргументы
+PORT_ARG_SET=""
+USER_ARG_SET=""
+PASS_ARG_SET=""
+BASE_ARG_SET=""
+
 # Парсинг аргументов командной строки
 while [[ $# -gt 0 ]]; do
     key="$1"
@@ -77,18 +83,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         -p|--port)
             PORT="$2"
+            PORT_ARG_SET="1"
             shift; shift
             ;;
         -u|--username)
             USERNAME="$2"
+            USER_ARG_SET="1"
             shift; shift
             ;;
         -w|--password)
             PASSWORD="$2"
+            PASS_ARG_SET="1"
             shift; shift
             ;;
         -b|--basepath)
             BASE_PATH="$2"
+            BASE_ARG_SET="1"
             shift; shift
             ;;
         *)
@@ -103,8 +113,10 @@ echo -e "${CYAN}================================================================
 echo -e "${PURPLE}    Автоматическое развертывание 3x-ui с Nginx Reality Fallback  ${NC}"
 echo -e "${CYAN}================================================================${NC}"
 
+# Шаг 1. Ввод домена
 if [ -z "$DOMAIN" ]; then
-    echo -e "${YELLOW}Для работы SSL сертификата необходим зарегистрированный домен!${NC}"
+    echo -e "${YELLOW}Шаг 1/6: Ввод доменного имени${NC}"
+    echo -e "Для работы SSL сертификата необходим зарегистрированный домен!"
     echo -e "Убедитесь, что ваш домен уже направлен (DNS A-запись) на IP этого сервера."
     read -p "Введите ваш домен (например, yourdomain.com): " DOMAIN
 fi
@@ -114,7 +126,7 @@ if [ -z "$DOMAIN" ]; then
     exit 1
 fi
 
-# Проверка DNS записи перед продолжением (опционально, но полезно)
+# Проверка DNS записи перед продолжением
 log_info "Проверка разрешения DNS для домена $DOMAIN..."
 DOM_IP=$(getent ahosts "$DOMAIN" | awk '{print $1}' | head -n 1)
 if [ -z "$DOM_IP" ]; then
@@ -126,13 +138,44 @@ if [ -z "$DOM_IP" ]; then
     fi
 fi
 
-# Запросы для остальных параметров, если не были переданы аргументами
+# Шаг 2. Ввод email
 if [ -z "$EMAIL" ]; then
-    read -p "Введите email для Let's Encrypt (опционально, нажмите Enter): " EMAIL
+    echo -e "\n${YELLOW}Шаг 2/6: Электронная почта для SSL${NC}"
+    read -p "Введите email для Let's Encrypt (опционально, нажмите Enter для пропуска): " EMAIL
+fi
+
+# Шаг 3. Ввод порта панели
+if [ -z "$PORT_ARG_SET" ]; then
+    echo -e "\n${YELLOW}Шаг 3/6: Порт панели управления${NC}"
+    read -p "Введите порт для панели 3x-ui [по умолчанию: 2053]: " PORT_INPUT
+    PORT="${PORT_INPUT:-2053}"
+fi
+
+# Шаг 4. Ввод имени пользователя
+if [ -z "$USER_ARG_SET" ]; then
+    echo -e "\n${YELLOW}Шаг 4/6: Имя пользователя панели${NC}"
+    read -p "Введите имя пользователя панели [по умолчанию: admin]: " USER_INPUT
+    USERNAME="${USER_INPUT:-admin}"
+fi
+
+# Шаг 5. Ввод пароля
+if [ -z "$PASS_ARG_SET" ]; then
+    echo -e "\n${YELLOW}Шаг 5/6: Пароль панели${NC}"
+    read -p "Введите пароль панели [по умолчанию: admin]: " PASS_INPUT
+    PASSWORD="${PASS_INPUT:-admin}"
+fi
+
+# Шаг 6. Ввод секретного пути
+if [ -z "$BASE_ARG_SET" ]; then
+    echo -e "\n${YELLOW}Шаг 6/6: Секретный путь панели (Base Path)${NC}"
+    read -p "Введите секретный путь панели (например, secretpath) [по умолчанию: panel]: " BASE_INPUT
+    BASE_PATH="${BASE_INPUT:-panel}"
 fi
 
 # Очистка пути панели от начального слэша
 BASE_PATH=$(echo "$BASE_PATH" | sed 's#^/##')
+
+echo -e "\n${CYAN}Настройки приняты. Начинаем установку...${NC}\n"
 
 # 3. Обновление пакетов системы
 log_info "Обновление списка пакетов системы..."
