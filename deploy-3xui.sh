@@ -62,12 +62,14 @@ PORT="2053"
 USERNAME="admin"
 PASSWORD="admin"
 BASE_PATH="panel"
+SUB_PORT="2096"
 
 # Флаги для отслеживания параметров, заданных через аргументы
 PORT_ARG_SET=""
 USER_ARG_SET=""
 PASS_ARG_SET=""
 BASE_ARG_SET=""
+SUB_PORT_ARG_SET=""
 
 # Парсинг аргументов командной строки
 while [[ $# -gt 0 ]]; do
@@ -101,6 +103,11 @@ while [[ $# -gt 0 ]]; do
             BASE_ARG_SET="1"
             shift; shift
             ;;
+        -s|--subport)
+            SUB_PORT="$2"
+            SUB_PORT_ARG_SET="1"
+            shift; shift
+            ;;
         *)
             log_warning "Неизвестный аргумент: $1"
             shift
@@ -115,7 +122,7 @@ echo -e "${CYAN}================================================================
 
 # Шаг 1. Ввод домена
 if [ -z "$DOMAIN" ]; then
-    echo -e "${YELLOW}Шаг 1/6: Ввод доменного имени${NC}"
+    echo -e "${YELLOW}Шаг 1/7: Ввод доменного имени${NC}"
     echo -e "Для работы SSL сертификата необходим зарегистрированный домен!"
     echo -e "Убедитесь, что ваш домен уже направлен (DNS A-запись) на IP этого сервера."
     read -p "Введите ваш домен (например, yourdomain.com): " DOMAIN
@@ -140,36 +147,43 @@ fi
 
 # Шаг 2. Ввод email
 if [ -z "$EMAIL" ]; then
-    echo -e "\n${YELLOW}Шаг 2/6: Электронная почта для SSL${NC}"
+    echo -e "\n${YELLOW}Шаг 2/7: Электронная почта для SSL${NC}"
     read -p "Введите email для Let's Encrypt (опционально, нажмите Enter для пропуска): " EMAIL
 fi
 
 # Шаг 3. Ввод порта панели
 if [ -z "$PORT_ARG_SET" ]; then
-    echo -e "\n${YELLOW}Шаг 3/6: Порт панели управления${NC}"
+    echo -e "\n${YELLOW}Шаг 3/7: Порт панели управления${NC}"
     read -p "Введите порт для панели 3x-ui [по умолчанию: 2053]: " PORT_INPUT
     PORT="${PORT_INPUT:-2053}"
 fi
 
 # Шаг 4. Ввод имени пользователя
 if [ -z "$USER_ARG_SET" ]; then
-    echo -e "\n${YELLOW}Шаг 4/6: Имя пользователя панели${NC}"
+    echo -e "\n${YELLOW}Шаг 4/7: Имя пользователя панели${NC}"
     read -p "Введите имя пользователя панели [по умолчанию: admin]: " USER_INPUT
     USERNAME="${USER_INPUT:-admin}"
 fi
 
 # Шаг 5. Ввод пароля
 if [ -z "$PASS_ARG_SET" ]; then
-    echo -e "\n${YELLOW}Шаг 5/6: Пароль панели${NC}"
+    echo -e "\n${YELLOW}Шаг 5/7: Пароль панели${NC}"
     read -p "Введите пароль панели [по умолчанию: admin]: " PASS_INPUT
     PASSWORD="${PASS_INPUT:-admin}"
 fi
 
 # Шаг 6. Ввод секретного пути
 if [ -z "$BASE_ARG_SET" ]; then
-    echo -e "\n${YELLOW}Шаг 6/6: Секретный путь панели (Base Path)${NC}"
+    echo -e "\n${YELLOW}Шаг 6/7: Секретный путь панели (Base Path)${NC}"
     read -p "Введите секретный путь панели (например, secretpath) [по умолчанию: panel]: " BASE_INPUT
     BASE_PATH="${BASE_INPUT:-panel}"
+fi
+
+# Шаг 7. Ввод порта подписки
+if [ -z "$SUB_PORT_ARG_SET" ]; then
+    echo -e "\n${YELLOW}Шаг 7/7: Порт подписок (Subscription Port)${NC}"
+    read -p "Введите порт подписки 3x-ui [по умолчанию: 2096]: " SUB_PORT_INPUT
+    SUB_PORT="${SUB_PORT_INPUT:-2096}"
 fi
 
 # Очистка пути панели от начального слэша
@@ -195,6 +209,7 @@ ufw allow 22/tcp comment 'SSH'
 ufw allow 80/tcp comment 'HTTP for Certbot/Nginx'
 ufw allow 443/tcp comment 'HTTPS for Reality'
 ufw allow "$PORT"/tcp comment '3x-ui Panel'
+ufw allow "$SUB_PORT"/tcp comment '3x-ui Subscription'
 
 # Включение UFW без интерактивного подтверждения
 echo "y" | ufw enable
@@ -225,7 +240,7 @@ log_success "SSL сертификат успешно выпущен."
 log_info "Установка веб-сервера Nginx..."
 apt install nginx -y
 
-# 7. Конфигурация Nginx для Reality Fallback
+# 7. Конфигурация Nginx для Reality Fallback c проксированием подписок и панели
 NGINX_CONF="/etc/nginx/sites-available/reality-nginx"
 log_info "Создание конфигурации Nginx..."
 
@@ -246,6 +261,40 @@ server {
     location / {
         root /var/www/html;
         index index.html;
+    }
+
+    location ~* ^/(sub|clash|json)/ {
+        proxy_pass https://127.0.0.1:$SUB_PORT;
+
+        proxy_http_version 1.1;
+
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$http_host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$http_host;
+
+        proxy_buffering off;
+        proxy_read_timeout 120s;
+    }
+
+    location /$BASE_PATH/ {
+        proxy_pass https://127.0.0.1:$PORT;
+        
+        proxy_http_version 1.1;
+
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+
+        proxy_buffering off;
+        proxy_read_timeout 120s;
     }
 }
 
@@ -327,18 +376,20 @@ echo -e "\n${GREEN}=============================================================
 echo -e "${GREEN}    Установка успешно завершена!                                ${NC}"
 echo -e "${GREEN}================================================================${NC}"
 echo -e "${BLUE}Домен:${NC} $DOMAIN"
-echo -e "${BLUE}Порт панели:${NC} $PORT"
+echo -e "${BLUE}Порт панели:${NC} $PORT (проксируется Nginx на порт 443)"
 echo -e "${BLUE}Путь панели:${NC} /$BASE_PATH"
+echo -e "${BLUE}Порт подписки:${NC} $SUB_PORT (проксируется Nginx на порт 443)"
 echo -e "${BLUE}Имя пользователя:${NC} $USERNAME"
 echo -e "${BLUE}Пароль:${NC} $PASSWORD"
 echo -e "----------------------------------------------------------------"
-echo -e "${YELLOW}Ссылка для входа в панель:${NC} https://$DOMAIN:$PORT/$BASE_PATH"
+echo -e "${YELLOW}Ссылка для входа в панель:${NC} https://$DOMAIN/$BASE_PATH/"
+echo -e "${YELLOW}Ссылка для подписок (в клиентах):${NC} https://$DOMAIN/sub/"
 echo -e "----------------------------------------------------------------"
 echo -e "${CYAN}Инструкция по настройке Reality Inbound в панели:${NC}"
 echo -e "1. Перейдите в раздел ${PURPLE}Inbounds (Подключения)${NC} -> ${PURPLE}Add Inbound (Добавить)${NC}."
 echo -e "2. Выберите протокол: ${BLUE}vless${NC}."
 echo -e "3. Порт: ${BLUE}443${NC}."
-echo -e "4. Включите переключатель ${BLUE}Reality${NC}."
+echo -e "4. Включите Reality: ${BLUE}Reality: Enabled${NC}."
 echo -e "5. В поле ${BLUE}Dest${NC} введите: ${YELLOW}unix:/dev/shm/nginx.sock${NC} (или 127.0.0.1:80 в качестве резерва)."
 echo -e "6. В поле ${BLUE}Server Names (SNI)${NC} введите ваш домен: ${YELLOW}$DOMAIN${NC}."
 echo -e "7. В поле ${BLUE}Fallback${NC} (в самом низу Reality настроек) выберите: ${YELLOW}Dest: unix:/dev/shm/nginx.sock${NC}."
