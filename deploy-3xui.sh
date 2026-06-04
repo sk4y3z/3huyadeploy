@@ -31,6 +31,17 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Функция для генерации случайных строк
+generate_random_string() {
+    local length="$1"
+    # Попытка использовать openssl, если доступно, иначе urandom
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c "$length"
+    else
+        cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w "$length" | head -n 1
+    fi
+}
+
 # 1. Проверка прав суперпользователя (root)
 if [ "$EUID" -ne 0 ]; then
     log_error "Пожалуйста, запустите этот скрипт с правами root (sudo)."
@@ -55,13 +66,18 @@ if [[ "$OS" != "ubuntu" && "$OS" != "debian" ]]; then
     fi
 fi
 
-# Инициализация переменных по умолчанию
+# Генерация значений по умолчанию
+DEFAULT_USERNAME=$(generate_random_string 8)
+DEFAULT_PASSWORD=$(generate_random_string 12)
+DEFAULT_BASE_PATH=$(generate_random_string 12)
+
+# Инициализация переменных
 DOMAIN=""
 EMAIL=""
 PORT="2053"
-USERNAME="admin"
-PASSWORD="admin"
-BASE_PATH="panel"
+USERNAME=""
+PASSWORD=""
+BASE_PATH=""
 SUB_PORT="2096"
 
 # Флаги для отслеживания параметров, заданных через аргументы
@@ -161,22 +177,28 @@ fi
 # Шаг 4. Ввод имени пользователя
 if [ -z "$USER_ARG_SET" ]; then
     echo -e "\n${YELLOW}Шаг 4/7: Имя пользователя панели${NC}"
-    read -p "Введите имя пользователя панели [по умолчанию: admin]: " USER_INPUT
-    USERNAME="${USER_INPUT:-admin}"
+    read -p "Введите имя пользователя панели [по умолчанию: $DEFAULT_USERNAME]: " USER_INPUT
+    USERNAME="${USER_INPUT:-$DEFAULT_USERNAME}"
+else
+    USERNAME="${USERNAME:-$DEFAULT_USERNAME}"
 fi
 
 # Шаг 5. Ввод пароля
 if [ -z "$PASS_ARG_SET" ]; then
     echo -e "\n${YELLOW}Шаг 5/7: Пароль панели${NC}"
-    read -p "Введите пароль панели [по умолчанию: admin]: " PASS_INPUT
-    PASSWORD="${PASS_INPUT:-admin}"
+    read -p "Введите пароль панели [по умолчанию: $DEFAULT_PASSWORD]: " PASS_INPUT
+    PASSWORD="${PASS_INPUT:-$DEFAULT_PASSWORD}"
+else
+    PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
 fi
 
 # Шаг 6. Ввод секретного пути
 if [ -z "$BASE_ARG_SET" ]; then
     echo -e "\n${YELLOW}Шаг 6/7: Секретный путь панели (Base Path)${NC}"
-    read -p "Введите секретный путь панели (например, secretpath) [по умолчанию: panel]: " BASE_INPUT
-    BASE_PATH="${BASE_INPUT:-panel}"
+    read -p "Введите секретный путь панели (например, secretpath) [по умолчанию: $DEFAULT_BASE_PATH]: " BASE_INPUT
+    BASE_PATH="${BASE_INPUT:-$DEFAULT_BASE_PATH}"
+else
+    BASE_PATH="${BASE_PATH:-$DEFAULT_BASE_PATH}"
 fi
 
 # Шаг 7. Ввод порта подписки
