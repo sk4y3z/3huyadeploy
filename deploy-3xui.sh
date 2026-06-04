@@ -596,8 +596,16 @@ if not xray_bins:
 xray_bin = xray_bins[0]
 
 out = subprocess.check_output([xray_bin, "x25519"]).decode('utf-8')
-priv_key = re.search(r"Private key: (\S+)", out).group(1)
-pub_key = re.search(r"Public key: (\S+)", out).group(1)
+# Поддержка как старого формата вывода (Private key: / Public key:), так и нового (PrivateKey: / Password:)
+priv_match = re.search(r"(?:Private\s*key|PrivateKey):\s*(\S+)", out, re.IGNORECASE)
+pub_match = re.search(r"(?:Public\s*key|PublicKey|Password):\s*(\S+)", out, re.IGNORECASE)
+
+if not priv_match or not pub_match:
+    print(f"Error parsing x25519 output: {out}")
+    sys.exit(1)
+
+priv_key = priv_match.group(1)
+pub_key = pub_match.group(1)
 
 # Создание параметров клиента
 client_uuid = str(uuid.uuid4())
