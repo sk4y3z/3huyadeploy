@@ -328,19 +328,178 @@ systemctl restart nginx
 systemctl enable nginx
 log_success "Nginx настроен и успешно перезапущен."
 
-# 8. Установка сайта-заглушки (landing page)
-log_info "Установка сайта-заглушки (SaaS Landing Page)..."
-apt install git -y
+# 8. Установка сайта-заглушки (частный медиасервер)
+log_info "Создание сайта-заглушки (Private Media Server)..."
+mkdir -p /var/www/html
 rm -rf /var/www/html/*
-git clone https://github.com/bradtraversy/saas-landing-page.git /var/www/html
 
-if [ $? -ne 0 ]; then
-    log_warning "Не удалось склонировать сайт-заглушку с GitHub. Создан стандартный index.html."
-    echo "<h1>Welcome to $DOMAIN</h1>" > /var/www/html/index.html
-fi
+cat > /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aether Private Media Server</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: radial-gradient(circle at center, #1b2030 0%, #0a0c10 100%);
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .login-container {
+            background: rgba(15, 20, 30, 0.75);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 40px;
+            border-radius: 16px;
+            width: 100%;
+            max-width: 380px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 32px;
+            font-weight: 700;
+            color: #00bcd4;
+            margin-bottom: 8px;
+            letter-spacing: 1px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo svg {
+            width: 36px;
+            height: 36px;
+            fill: #00bcd4;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: #888da0;
+            margin-bottom: 30px;
+        }
+
+        .input-group {
+            position: relative;
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 12px;
+            color: #888da0;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .input-group input {
+            width: 100%;
+            box-sizing: border-box;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 12px 16px;
+            border-radius: 8px;
+            color: #ffffff;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #00bcd4;
+            background: rgba(255, 255, 255, 0.06);
+            box-shadow: 0 0 10px rgba(0, 188, 212, 0.2);
+        }
+
+        .btn {
+            width: 100%;
+            background: #00bcd4;
+            color: #0c0e14;
+            border: none;
+            padding: 14px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+
+        .btn:hover {
+            background: #00e5ff;
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .footer {
+            margin-top: 30px;
+            font-size: 11px;
+            color: #4a4f66;
+        }
+
+        .footer a {
+            color: #888da0;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            color: #00bcd4;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <svg viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+            </svg>
+            <span>AETHER</span>
+        </div>
+        <div class="subtitle">Private Home Media Gateway</div>
+        
+        <form onsubmit="event.preventDefault(); alert('Authentication failed: Access denied from this IP.');">
+            <div class="input-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" autocomplete="off" placeholder="Enter username">
+            </div>
+            
+            <div class="input-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" autocomplete="off" placeholder="Enter password">
+            </div>
+            
+            <button type="submit" class="btn">Sign In</button>
+        </form>
+        
+        <div class="footer">
+            <span>Aether Stream Services &copy; 2026. </span>
+            <br>
+            <span style="font-size: 9px; margin-top: 5px; display: inline-block;">Node status: <span style="color: #4caf50;">Online</span></span>
+        </div>
+    </div>
+</body>
+</html>
+EOF
 
 chown -R www-data:www-data /var/www/html
-log_success "Сайт-заглушка успешно развернут."
+log_success "Сайт-заглушка (маскировка под Aether Media Server) успешно развернут."
 
 # 9. Установка и настройка панели 3x-ui
 log_info "Установка 3x-ui панели..."
