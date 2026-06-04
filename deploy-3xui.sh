@@ -201,7 +201,7 @@ fi
 
 # 4. Установка UFW и настройка портов
 log_info "Установка и настройка файрволла UFW..."
-apt install ufw -y
+apt install ufw python3 -y
 
 # Разрешаем порты
 log_info "Настройка правил файрволла..."
@@ -524,6 +524,185 @@ log_info "Применение настроек панели (пользоват
 log_info "Подключение SSL сертификатов к панели 3x-ui..."
 /usr/local/x-ui/x-ui cert -webCert "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" -webCertKey "/etc/letsencrypt/live/$DOMAIN/privkey.pem"
 
+# 11. Автоматическая запись VLESS Reality Inbound и настроек подписки напрямую в БД
+log_info "Генерация скрипта настройки базы данных..."
+
+cat > /usr/local/x-ui/configure_3xui_db.py << 'EOF'
+import sqlite3
+import uuid
+import random
+import string
+import json
+import glob
+import subprocess
+import re
+import sys
+
+db_path = "/etc/x-ui/x-ui.db"
+domain = sys.argv[1]
+port = int(sys.argv[2])
+sub_port = int(sys.argv[3])
+base_path = sys.argv[4]
+
+conn = sqlite3.connect(db_path)
+cursor = conn.cursor()
+
+# Функция установки/обновления параметров в таблице settings
+def set_setting(key, value):
+    cursor.execute("SELECT id FROM settings WHERE key=?", (key,))
+    row = cursor.fetchone()
+    if row:
+        cursor.execute("UPDATE settings SET value=? WHERE key=?", (value, key))
+    else:
+        cursor.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
+
+# Записываем настройки подписок (Subscription settings)
+set_setting("subEnable", "true")
+set_setting("subJsonEnable", "true")
+set_setting("subClashEnable", "true")
+set_setting("subPort", str(sub_port))
+set_setting("subURI", f"https://{domain}/sub/")
+set_setting("subJsonURI", f"https://{domain}/json/")
+set_setting("subClashURI", f"https://{domain}/clash/")
+set_setting("subListen", "127.0.0.1")
+
+# Генерация x25519 ключей с помощью встроенного xray
+xray_bins = glob.glob("/usr/local/x-ui/bin/xray-linux-*")
+if not xray_bins:
+    print("Error: xray binary not found.")
+    sys.exit(1)
+xray_bin = xray_bins[0]
+
+out = subprocess.check_output([xray_bin, "x25519"]).decode('utf-8')
+priv_key = re.search(r"Private key: (\S+)", out).group(1)
+pub_key = re.search(r"Public key: (\S+)", out).group(1)
+
+# Создание параметров клиента
+client_uuid = str(uuid.uuid4())
+client_sub_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=16))
+short_id = "".join(random.choices("0123456789abcdef", k=16))
+
+settings_json = {
+  "clients": [
+    {
+      "id": client_uuid,
+      "flow": "xtls-rprx-vision",
+      "email": f"admin@{domain}",
+      "limitIp": 0,
+      "totalGB": 0,
+      "expiryTime": 0,
+      "enable": True,
+      "tgId": "",
+      "subId": client_sub_id
+    }
+  ],
+  "decryption": "none",
+  "fallbacks": []
+}
+
+stream_settings_json = {
+  "network": "tcp",
+  "security": "reality",
+  "realitySettings": {
+    "show": True,
+    "dest": "/dev/shm/nginx.sock",
+    "xver": 1,
+    "serverNames": [
+      domain
+    ],
+    "privateKey": priv_key,
+    "publicKey": pub_key,
+    "minClientVer": "",
+    "maxClientVer": "",
+    "maxTimeDiff": 0,
+    "shortIds": [
+      short_id
+    ]
+  },
+  "tcpSettings": {}
+}
+
+sniffing_json = {
+  "enabled": True,
+  "destOverride": [
+    "http",
+    "tls"
+  ],
+  "metadataOnly": False,
+  "routeOnly": False
+}
+
+# Очистка старых инбаундов на порту 443
+cursor.execute("DELETE FROM inbounds WHERE port=443")
+
+cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='clients'")
+clients_table_exists = cursor.fetchone() is not None
+
+# Вставка нового инбаунда VLESS Reality
+cursor.execute("""
+INSERT INTO inbounds (user_id, up, down, total, remark, enable, expiry_time, listen, port, protocol, settings, stream_settings, tag, sniffing)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""", (
+    1, 0, 0, 0, "reality", 1, 0, "", 443, "vless",
+    json.dumps(settings_json), json.dumps(stream_settings_json), "reality-inbound", json.dumps(sniffing_json)
+))
+inbound_id = cursor.lastrowid
+
+# Если в этой версии 3x-ui есть выделенная таблица clients, синхронизируем данные туда
+if clients_table_exists:
+    cursor.execute("PRAGMA table_info(clients)")
+    columns = [col[1] for col in cursor.fetchall()]
+    
+    client_data = {
+        "inbound_id": inbound_id,
+        "email": f"admin@{domain}",
+        "uuid": client_uuid,
+        "flow": "xtls-rprx-vision",
+        "enable": 1,
+        "sub_id": client_sub_id,
+        "up": 0,
+        "down": 0,
+        "total": 0,
+        "expiry_time": 0
+    }
+    
+    insert_cols = [col for col in client_data.keys() if col in columns]
+    placeholders = ", ".join(["?"] * len(insert_cols))
+    query = f"INSERT INTO clients ({', '.join(insert_cols)}) VALUES ({placeholders})"
+    values = [client_data[col] for col in insert_cols]
+    cursor.execute(query, values)
+
+conn.commit()
+conn.close()
+
+# Вывод параметров в stdout для парсинга в Bash
+print(f"CLIENT_UUID={client_uuid}")
+print(f"CLIENT_SUB_ID={client_sub_id}")
+print(f"PUBLIC_KEY={pub_key}")
+print(f"SHORT_ID={short_id}")
+EOF
+
+log_info "Запуск конфигурации базы данных..."
+python3 /usr/local/x-ui/configure_3xui_db.py "$DOMAIN" "$PORT" "$SUB_PORT" "$BASE_PATH" > /tmp/db_config_out.txt
+
+if [ $? -eq 0 ]; then
+    # Считываем переменные, созданные Python скриптом
+    CLIENT_UUID=$(grep -Eo 'CLIENT_UUID=.+' /tmp/db_config_out.txt | cut -d'=' -f2)
+    CLIENT_SUB_ID=$(grep -Eo 'CLIENT_SUB_ID=.+' /tmp/db_config_out.txt | cut -d'=' -f2)
+    PUBLIC_KEY=$(grep -Eo 'PUBLIC_KEY=.+' /tmp/db_config_out.txt | cut -d'=' -f2)
+    SHORT_ID=$(grep -Eo 'SHORT_ID=.+' /tmp/db_config_out.txt | cut -d'=' -f2)
+    log_success "База данных 3x-ui успешно настроена!"
+    
+    # Генерация VLESS Reality ссылки подключения
+    VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DOMAIN}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#reality"
+else
+    log_error "Не удалось автоматически настроить базу данных 3x-ui."
+fi
+
+# Чистим временные скрипты
+rm -f /usr/local/x-ui/configure_3xui_db.py
+rm -f /tmp/db_config_out.txt
+
 log_info "Перезапуск сервиса 3x-ui..."
 systemctl restart x-ui
 systemctl enable x-ui
@@ -543,14 +722,14 @@ echo -e "${BLUE}Пароль:${NC} $PASSWORD"
 echo -e "----------------------------------------------------------------"
 echo -e "${YELLOW}Ссылка для входа в панель:${NC} https://$DOMAIN/$BASE_PATH/"
 echo -e "${YELLOW}Ссылка для подписок (в клиентах):${NC} https://$DOMAIN/sub/"
+if [ -n "$VLESS_LINK" ]; then
+    echo -e "----------------------------------------------------------------"
+    echo -e "${PURPLE}Ваша готовая ссылка подключения VLESS + Reality:${NC}"
+    echo -e "${CYAN}${VLESS_LINK}${NC}"
+fi
 echo -e "----------------------------------------------------------------"
 echo -e "${CYAN}Инструкция по настройке Reality Inbound в панели:${NC}"
-echo -e "1. Перейдите в раздел ${PURPLE}Inbounds (Подключения)${NC} -> ${PURPLE}Add Inbound (Добавить)${NC}."
-echo -e "2. Выберите протокол: ${BLUE}vless${NC}."
-echo -e "3. Порт: ${BLUE}443${NC}."
-echo -e "4. Включите Reality: ${BLUE}Reality: Enabled${NC}."
-echo -e "5. В поле ${BLUE}Dest${NC} введите: ${YELLOW}unix:/dev/shm/nginx.sock${NC} (или 127.0.0.1:80 в качестве резерва)."
-echo -e "6. В поле ${BLUE}Server Names (SNI)${NC} введите ваш домен: ${YELLOW}$DOMAIN${NC}."
-echo -e "7. В поле ${BLUE}Fallback${NC} (в самом низу Reality настроек) выберите: ${YELLOW}Dest: unix:/dev/shm/nginx.sock${NC}."
-echo -e "8. Сгенерируйте ключи (Get New Keys), добавьте клиента (Flow: xtls-rprx-vision) и сохраните."
+echo -e "Инбаунд на порту 443 (VLESS + Reality) был добавлен автоматически."
+echo -e "Вы можете войти в панель и увидеть настройки в разделе ${PURPLE}Inbounds (Подключения)${NC}."
+echo -e "Никаких ручных конфигураций делать больше не нужно! Просто импортируйте ссылку выше."
 echo -e "${GREEN}================================================================${NC}\n"
