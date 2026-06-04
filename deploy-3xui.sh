@@ -559,12 +559,17 @@ import glob
 import subprocess
 import re
 import sys
+import shutil
+import os
 
 db_path = "/etc/x-ui/x-ui.db"
 domain = sys.argv[1]
 port = int(sys.argv[2])
 sub_port = int(sys.argv[3])
 base_path = sys.argv[4]
+
+def print_err(msg):
+    sys.stderr.write(msg + "\n")
 
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
@@ -588,20 +593,48 @@ set_setting("subJsonURI", f"https://{domain}/json/")
 set_setting("subClashURI", f"https://{domain}/clash/")
 set_setting("subListen", "127.0.0.1")
 
-# Генерация x25519 ключей с помощью встроенного xray
-xray_bins = glob.glob("/usr/local/x-ui/bin/xray-linux-*")
-if not xray_bins:
-    print("Error: xray binary not found.")
-    sys.exit(1)
-xray_bin = xray_bins[0]
+# Поиск xray бинарника в стандартных местах и переменной PATH
+search_paths = [
+    "/usr/local/x-ui/bin/xray-linux-*",
+    "/usr/local/x-ui/bin/xray",
+    "/usr/local/x-ui/xray-linux-*",
+    "/usr/local/x-ui/xray",
+]
+xray_bins = []
+for p in search_paths:
+    xray_bins.extend(glob.glob(p))
 
-out = subprocess.check_output([xray_bin, "x25519"]).decode('utf-8')
+xray_bin = None
+if xray_bins:
+    xray_bin = xray_bins[0]
+else:
+    xray_bin = shutil.which("xray")
+
+if not xray_bin:
+    print_err("Error: xray binary not found in standard paths (/usr/local/x-ui/bin/) or system PATH.")
+    sys.exit(1)
+
+# Убедимся в наличии прав на запуск
+try:
+    os.chmod(xray_bin, 0o755)
+except Exception as e:
+    print_err(f"Warning: could not chmod +x {xray_bin}: {e}")
+
+try:
+    out = subprocess.check_output([xray_bin, "x25519"], stderr=subprocess.STDOUT).decode('utf-8')
+except subprocess.CalledProcessError as e:
+    print_err(f"Error running xray x25519: {e.output.decode('utf-8', errors='ignore')}")
+    sys.exit(1)
+except Exception as e:
+    print_err(f"Error executing xray: {e}")
+    sys.exit(1)
+
 # Поддержка как старого формата вывода (Private key: / Public key:), так и нового (PrivateKey: / Password:)
 priv_match = re.search(r"(?:Private\s*key|PrivateKey):\s*(\S+)", out, re.IGNORECASE)
 pub_match = re.search(r"(?:Public\s*key|PublicKey|Password):\s*(\S+)", out, re.IGNORECASE)
 
 if not priv_match or not pub_match:
-    print(f"Error parsing x25519 output: {out}")
+    print_err(f"Error parsing x25519 output: {out}")
     sys.exit(1)
 
 priv_key = priv_match.group(1)
@@ -713,7 +746,7 @@ print(f"SHORT_ID={short_id}")
 EOF
 
 log_info "Запуск конфигурации базы данных..."
-python3 /usr/local/x-ui/configure_3xui_db.py "$DOMAIN" "$PORT" "$SUB_PORT" "$BASE_PATH" > /tmp/db_config_out.txt
+python3 /usr/local/x-ui/configure_3xui_db.py "$DOMAIN" "$PORT" "$SUB_PORT" "$BASE_PATH" > /tmp/db_config_out.txt 2> /tmp/db_config_err.txt
 
 if [ $? -eq 0 ]; then
     # Считываем переменные, созданные Python скриптом
@@ -727,11 +760,20 @@ if [ $? -eq 0 ]; then
     VLESS_LINK="vless://${CLIENT_UUID}@${DOMAIN}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DOMAIN}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#reality"
 else
     log_error "Не удалось автоматически настроить базу данных 3x-ui."
+    if [ -s /tmp/db_config_err.txt ]; then
+        log_error "Детали ошибки (stderr):"
+        cat /tmp/db_config_err.txt
+    fi
+    if [ -s /tmp/db_config_out.txt ]; then
+        log_error "Лог вывода (stdout):"
+        cat /tmp/db_config_out.txt
+    fi
 fi
 
 # Чистим временные скрипты
 rm -f /usr/local/x-ui/configure_3xui_db.py
 rm -f /tmp/db_config_out.txt
+rm -f /tmp/db_config_err.txt
 
 log_info "Перезапуск сервиса 3x-ui..."
 systemctl restart x-ui
